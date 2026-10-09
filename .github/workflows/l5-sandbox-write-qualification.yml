@@ -1,0 +1,76 @@
+name: L5 V2 sandbox App write qualification
+
+# Explicit manual invocation only; NEVER a scheduled production executor.
+on:
+  workflow_dispatch:
+    inputs:
+      probe_id:
+        description: 'Stable UUID identifying one replay-safe sandbox probe'
+        required: true
+        type: string
+        default: '00000000-0000-0000-0000-000000000601'
+      reviewed_executor_sha:
+        description: 'Exact independently reviewed OneCompany executor commit SHA'
+        required: true
+        type: string
+        default: 'e90c3df2d1ed53e704be04de8e4f533f50440628'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l5-sandbox-write-qualification
+  cancel-in-progress: false
+
+jobs:
+  sandbox-github-app-write:
+    if: github.repository == 'NTinkicht/qualification-l5-sandbox'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require pinned reviewed executor
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_executor_sha }}
+        run: |
+          if [[ ! "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'BLOCK_PERMISSION: exact reviewed SHA is required'
+            exit 1
+          fi
+
+      - name: Acquire sandbox-only App installation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.L5_SANDBOX_APP_ID }}
+          private-key: ${{ secrets.L5_SANDBOX_APP_PRIVATE_KEY }}
+          owner: NTinkicht
+          repositories: qualification-l5-sandbox
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-actions: write
+
+      - name: Checkout reviewed public executor without installation token
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_executor_sha }}
+        run: |
+          git -c credential.helper= clone --no-checkout --quiet --filter=blob:none \
+            https://github.com/NTinkicht/OneCompany.git ./reviewed-onecompany
+          git -C reviewed-onecompany checkout --quiet --detach "$REVIEWED_SHA"
+          if [[ "$(git -C reviewed-onecompany rev-parse HEAD)" != "$REVIEWED_SHA" ]]; then
+            echo 'BLOCK_PERMISSION: source SHA readback mismatch'
+            exit 1
+          fi
+          test -f reviewed-onecompany/scripts/sandbox_app_capabilities.py
+
+      - name: Qualify sandbox git push and draft PR only
+        env:
+          L5_APP_INSTALLATION_TOKEN: ${{ steps.app-token.outputs.token }}
+          PROBE_ID: ${{ inputs.probe_id }}
+        run: |
+          python reviewed-onecompany/scripts/sandbox_app_capabilities.py \
+            --sandbox-repo NTinkicht/qualification-l5-sandbox \
+            --push-pr --probe-id "$PROBE_ID"
+
+# The other seven GitHub write classes stay unverified until separately tested
+# with the exact same sandbox-only security and independent-review gates.
