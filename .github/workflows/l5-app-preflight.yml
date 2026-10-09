@@ -1,0 +1,65 @@
+name: L5 GitHub App sandbox preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: l5-sandbox-app-preflight
+  cancel-in-progress: false
+jobs:
+  installation-token-preflight:
+    if: github.repository == 'NTinkicht/qualification-l5-sandbox'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint sandbox-scoped installation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.L5_SANDBOX_APP_ID }}
+          private-key: ${{ secrets.L5_SANDBOX_APP_PRIVATE_KEY }}
+          owner: NTinkicht
+          repositories: qualification-l5-sandbox
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-actions: write
+      - name: Validate installation-token scope without mutations
+        env:
+          L5_APP_INSTALLATION_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          token = os.environ.get("L5_APP_INSTALLATION_TOKEN", "")
+          if not token:
+              sys.exit("BLOCK_PERMISSION: token unavailable")
+          def get(path):
+              request = Request(
+                  "https://api.github.com" + path,
+                  headers={"Authorization": "Bearer " + token,
+                           "Accept": "application/vnd.github+json",
+                           "X-GitHub-Api-Version": "2022-11-28",
+                           "User-Agent": "L5-Sandbox-App-Preflight"},
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      return json.load(response)
+              except (HTTPError, URLError, TimeoutError):
+                  sys.exit("BLOCK_PERMISSION: App API unavailable")
+          installation = get("/installation/repositories?per_page=100")
+          repos = installation.get("repositories")
+          if not isinstance(repos, list) or installation.get("total_count") != 1:
+              sys.exit("BLOCK_PERMISSION: token not confined to one repo")
+          if repos[0].get("full_name") != "NTinkicht/qualification-l5-sandbox":
+              sys.exit("BLOCK_PERMISSION: unexpected repo scope")
+          repo = get("/repos/NTinkicht/qualification-l5-sandbox")
+          if repo.get("private") is not True or repo.get("default_branch") != "main":
+              sys.exit("BLOCK_PERMISSION: incorrect sandbox policy")
+          print("PASS: installation token authenticated")
+          print("PASS: sandbox repository is the only token-accessible repository")
+          print("PASS: private main branch verified; no writes performed")
+          PY
