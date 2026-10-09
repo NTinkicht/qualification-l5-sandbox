@@ -10,10 +10,9 @@ on:
         type: string
         default: '00000000-0000-0000-0000-000000000601'
       reviewed_executor_sha:
-        description: 'Exact independently reviewed OneCompany executor commit SHA'
+        description: 'Pinned SHA with approved exact-head review gates'
         required: true
         type: string
-        default: 'e90c3df2d1ed53e704be04de8e4f533f50440628'
 
 permissions:
   contents: read
@@ -66,6 +65,7 @@ jobs:
       - name: Qualify sandbox git push and draft PR only
         env:
           L5_APP_INSTALLATION_TOKEN: ${{ steps.app-token.outputs.token }}
+          L5_EXPECTED_APP_ID: ${{ secrets.L5_SANDBOX_APP_ID }}
           PROBE_ID: ${{ inputs.probe_id }}
         run: |
           python reviewed-onecompany/scripts/sandbox_app_capabilities.py \
