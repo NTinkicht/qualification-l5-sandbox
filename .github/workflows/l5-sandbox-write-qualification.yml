@@ -9,10 +9,6 @@ on:
         required: true
         type: string
         default: '00000000-0000-0000-0000-000000000601'
-      reviewed_executor_sha:
-        description: 'Pinned SHA with approved exact-head review gates'
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -23,13 +19,15 @@ concurrency:
 
 jobs:
   sandbox-github-app-write:
-    if: github.repository == 'NTinkicht/qualification-l5-sandbox'
+    # Fail closed until the exact executor SHA is pinned in this trusted workflow
+    # after independent exact-head review and human acceptance of this workflow.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Require pinned reviewed executor
         env:
-          REVIEWED_SHA: ${{ inputs.reviewed_executor_sha }}
+          REVIEWED_SHA: BLOCKED_UNTIL_EXACT_HEAD_REVIEW
         run: |
           if [[ ! "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo 'BLOCK_PERMISSION: exact reviewed SHA is required'
@@ -51,7 +49,7 @@ jobs:
 
       - name: Checkout reviewed public executor without installation token
         env:
-          REVIEWED_SHA: ${{ inputs.reviewed_executor_sha }}
+          REVIEWED_SHA: BLOCKED_UNTIL_EXACT_HEAD_REVIEW
         run: |
           git -c credential.helper= clone --no-checkout --quiet --filter=blob:none \
             https://github.com/NTinkicht/OneCompany.git ./reviewed-onecompany
