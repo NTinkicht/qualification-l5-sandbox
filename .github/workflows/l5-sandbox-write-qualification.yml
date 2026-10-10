@@ -8,7 +8,6 @@ on:
         description: 'Stable UUID identifying one replay-safe sandbox probe'
         required: true
         type: string
-        default: '00000000-0000-0000-0000-000000000601'
 
 permissions:
   contents: read
@@ -19,13 +18,20 @@ concurrency:
 
 jobs:
   sandbox-github-app-write:
-    # Preparation only: a separately accepted activation change is required.
-    # Keep this job disabled; pinning the independently reviewed executor
-    # does NOT qualify any live App write or authorize activation.
-    if: ${{ false }}
+    # SECURITY-SENSITIVE ACTIVATION PROPOSAL: owner acceptance required
+    # before merging. The job is manual-dispatch only; never scheduled.
+    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require a fresh canonical UUID for this one probe
+        env:
+          PROBE_ID: ${{ inputs.probe_id }}
+        run: |
+          if [[ ! "$PROBE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo 'BLOCK_PERMISSION: canonical UUID input required'
+            exit 1
+          fi
       - name: Require pinned reviewed executor
         env:
           REVIEWED_SHA: 6348ba1a5e92856ea45716373558d88b856eec04
@@ -44,9 +50,6 @@ jobs:
           owner: NTinkicht
           repositories: qualification-l5-sandbox
           permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-actions: write
 
       - name: Checkout reviewed public executor without installation token
         env:
