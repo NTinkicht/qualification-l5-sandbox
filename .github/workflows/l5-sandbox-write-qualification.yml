@@ -18,9 +18,10 @@ concurrency:
 
 jobs:
   sandbox-github-app-write:
-    # SECURITY-SENSITIVE ACTIVATION PROPOSAL: owner acceptance required
-    # before merging. The job is manual-dispatch only; never scheduled.
-    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.event_name == 'workflow_dispatch' }}
+    # UNMERGED SECURITY-SENSITIVE proposal. Owner acceptance is required
+    # before merging. Deny PR-branch/other-ref dispatch and non-owner
+    # original or rerun identities before any secrets are ever provided.
+    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'NTinkicht' && github.triggering_actor == 'NTinkicht' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
