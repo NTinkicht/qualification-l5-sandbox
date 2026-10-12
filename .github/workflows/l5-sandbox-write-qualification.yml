@@ -2,6 +2,9 @@ name: L5 V2 sandbox App write qualification
 
 # Explicit manual invocation only; NEVER a scheduled production executor.
 on:
+  # Protected default-branch schedule only; PR branches cannot fire this event.
+  schedule:
+    - cron: '27 3 * * *'
   workflow_dispatch:
     inputs:
       probe_id:
@@ -11,6 +14,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+  issues: read
 
 concurrency:
   group: l5-sandbox-write-qualification
@@ -21,18 +26,27 @@ jobs:
     # UNMERGED SECURITY-SENSITIVE proposal. Owner acceptance is required
     # before merging. Deny PR-branch/other-ref dispatch and non-owner
     # original or rerun identities before any secrets are ever provided.
-    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == 'NTinkicht' && github.triggering_actor == 'NTinkicht' }}
+    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.actor == 'NTinkicht' && github.triggering_actor == 'NTinkicht')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Require a fresh canonical UUID for this one probe
+      - name: Resolve stable one-time sandbox probe
+        id: probe
         env:
-          PROBE_ID: ${{ inputs.probe_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PROBE: ${{ inputs.probe_id }}
         run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            PROBE_ID=a2f1e034-d9a9-4e52-838e-c4ed0ee060d4
+          else
+            PROBE_ID="$INPUT_PROBE"
+          fi
           if [[ ! "$PROBE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-            echo 'BLOCK_PERMISSION: canonical UUID input required'
+            echo 'BLOCK_PERMISSION: canonical UUID required'
             exit 1
           fi
+          echo "probe_id=$PROBE_ID" >> "$GITHUB_OUTPUT"
       - name: Fail closed unless trusted main is protected
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,6 +89,52 @@ jobs:
             exit 1
           fi
 
+      - name: Verify strict non-bypassable main and independent AI review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, sys, urllib.request
+          repo='NTinkicht/qualification-l5-sandbox'
+          def fetch(path):
+              req=urllib.request.Request('https://api.github.com/repos/'+repo+path, headers={
+                  'Authorization':'Bearer '+os.environ['GH_TOKEN'],
+                  'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req, timeout=15) as r: return json.load(r)
+          def deny(reason): sys.exit('BLOCK_PERMISSION:'+reason)
+          main=fetch('/branches/main'); meta=fetch(''); rule=fetch('/rulesets/24914796')
+          if not (meta.get('full_name')==repo and meta.get('private') is True
+                  and main.get('protected') is True
+                  and (main.get('commit') or {}).get('sha')==os.environ['EVENT_SHA']):
+              deny('MAIN_IDENTITY_OR_PROTECTION_INVALID')
+          if not (rule.get('id')==24914796 and rule.get('enforcement')=='active'
+                  and rule.get('source')==repo and rule.get('bypass_actors')==[]):
+              deny('MAIN_RULESET_NOT_PROVEN_BYPASS_FREE')
+          rules=rule.get('rules') or []
+          names={r.get('type') for r in rules}
+          if not {'deletion','non_fast_forward','pull_request','required_status_checks'}<=names:
+              deny('MAIN_REQUIRED_PROTECTIONS_MISSING')
+          approval=next((r.get('parameters') or {} for r in rules if r.get('type')=='pull_request'),{})
+          checks=next((r.get('parameters') or {} for r in rules if r.get('type')=='required_status_checks'),{})
+          if not (type(approval.get('required_approving_review_count')) is int
+                  and approval['required_approving_review_count']>=1
+                  and approval.get('dismiss_stale_reviews_on_push') is True
+                  and approval.get('require_last_push_approval') is True
+                  and approval.get('required_review_thread_resolution') is True
+                  and checks.get('strict_required_status_checks_policy') is True
+                  and bool(checks.get('required_status_checks'))):
+              deny('MAIN_RULESET_NOT_STRICTLY_REVIEW_GATED')
+          pr=fetch('/pulls/3')
+          if pr.get('merged') is not True: deny('ACTIVATION_PR_NOT_MERGED')
+          head=(pr.get('head') or {}).get('sha')
+          reviews=fetch('/pulls/3/reviews?per_page=100')
+          if not any(r.get('state')=='APPROVED' and r.get('commit_id')==head
+                     and (r.get('user') or {}).get('login')=='copilot-pull-request-reviewer[bot]'
+                     for r in reviews):
+              deny('INDEPENDENT_EXACT_HEAD_AI_APPROVAL_MISSING')
+          print('PASS: strict protected main and binding independent review')
+          PY
       - name: Acquire sandbox-only App installation token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -103,7 +163,7 @@ jobs:
           L5_APP_INSTALLATION_TOKEN: ${{ steps.app-token.outputs.token }}
           L5_EXPECTED_APP_ID: ${{ secrets.L5_SANDBOX_APP_ID }}
           L5_ATTESTED_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          PROBE_ID: ${{ inputs.probe_id }}
+          PROBE_ID: ${{ steps.probe.outputs.probe_id }}
         run: |
           python reviewed-onecompany/scripts/sandbox_app_capabilities.py \
             --sandbox-repo NTinkicht/qualification-l5-sandbox \
