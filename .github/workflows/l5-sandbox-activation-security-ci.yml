@@ -1,0 +1,40 @@
+name: L5 Sandbox Activation Security CI
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/l5-sandbox-write-qualification.yml'
+      - '.github/workflows/l5-sandbox-activation-security-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-security:
+    name: L5 sandbox activation security tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate unattended sandbox qualification gates
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          s=Path('.github/workflows/l5-sandbox-write-qualification.yml').read_text()
+          required=('github.event_name == \'schedule\'',
+                    "github.ref == 'refs/heads/main'",
+                    'INDEPENDENT_EXACT_HEAD_AI_APPROVAL_MISSING',
+                    'MAIN_RULESET_NOT_STRICTLY_REVIEW_GATED',
+                    'L5 sandbox activation security tests',
+                    'a2f1e034-d9a9-4e52-838e-c4ed0ee060d4',
+                    '--push-only')
+          for expected in required:
+              assert expected in s, expected
+          assert 'permission-pull-requests: write' not in s
+          assert s.index('Verify strict non-bypassable main and independent AI review') < s.index('Acquire sandbox-only App installation token')
+          fragment=s[s.index("          python - <<'PY'", s.index('Verify strict non-bypassable main and independent AI review')):]
+          fragment=fragment.split("          PY\n",1)[0].split("          python - <<'PY'\n",1)[1]
+          ast.parse('\n'.join(line[10:] for line in fragment.splitlines()))
+          print('PASS: guarded scheduled source, python syntax and read-only privileges')
+          PY

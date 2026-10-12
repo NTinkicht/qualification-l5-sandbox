@@ -123,7 +123,9 @@ jobs:
                   and approval.get('require_last_push_approval') is True
                   and approval.get('required_review_thread_resolution') is True
                   and checks.get('strict_required_status_checks_policy') is True
-                  and bool(checks.get('required_status_checks'))):
+                  and any(isinstance(c, dict) and c.get('context')=='L5 sandbox activation security tests'
+                          and c.get('integration_id')==15368
+                          for c in (checks.get('required_status_checks') or []))):
               deny('MAIN_RULESET_NOT_STRICTLY_REVIEW_GATED')
           pr=fetch('/pulls/3')
           if pr.get('merged') is not True: deny('ACTIVATION_PR_NOT_MERGED')
