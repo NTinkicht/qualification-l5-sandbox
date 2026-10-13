@@ -1,6 +1,6 @@
 name: L5 V2 sandbox App write qualification
 
-# Explicit manual invocation only; NEVER a scheduled production executor.
+# Sandbox-only unattended qualification proposal; NEVER a production controller.
 on:
   # Protected default-branch schedule only; PR branches cannot fire this event.
   schedule:
@@ -26,7 +26,7 @@ jobs:
     # UNMERGED SECURITY-SENSITIVE proposal. Owner acceptance is required
     # before merging. Deny PR-branch/other-ref dispatch and non-owner
     # original or rerun identities before any secrets are ever provided.
-    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.actor == 'NTinkicht' && github.triggering_actor == 'NTinkicht')) }}
+    if: ${{ github.repository == 'NTinkicht/qualification-l5-sandbox' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.actor == 'NTinkicht' && github.triggering_actor == 'NTinkicht')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "schedule" ]]; then
-            PROBE_ID=a2f1e034-d9a9-4e52-838e-c4ed0ee060d4
+            PROBE_ID="$(python -c 'import uuid; print(uuid.uuid4())')"
           else
             PROBE_ID="$INPUT_PROBE"
           fi
@@ -137,16 +137,6 @@ jobs:
               deny('INDEPENDENT_EXACT_HEAD_AI_APPROVAL_MISSING')
           print('PASS: strict protected main and binding independent review')
           PY
-      - name: Acquire sandbox-only App installation token
-        id: app-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ secrets.L5_SANDBOX_APP_ID }}
-          private-key: ${{ secrets.L5_SANDBOX_APP_PRIVATE_KEY }}
-          owner: NTinkicht
-          repositories: qualification-l5-sandbox
-          permission-contents: write
-
       - name: Checkout reviewed public executor without installation token
         env:
           REVIEWED_SHA: 6348ba1a5e92856ea45716373558d88b856eec04
@@ -159,6 +149,91 @@ jobs:
             exit 1
           fi
           test -f reviewed-onecompany/scripts/sandbox_app_capabilities.py
+
+      - name: Refuse replay and unsafe executor before App token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import ast
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          def deny(reason):
+              sys.exit("BLOCK_PERMISSION:" + reason)
+
+          # A previous attempt, successful or not, consumes the one-time
+          # sandbox qualification slot. Workflow concurrency serializes
+          # simultaneous invocations; never mint a second installation token.
+          url = ("https://api.github.com/repos/NTinkicht/qualification-l5-sandbox"
+                 "/actions/workflows/l5-sandbox-write-qualification.yml/runs"
+                 "?branch=main&per_page=100")
+          request = urllib.request.Request(url, headers={
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          })
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  history = json.load(response)
+              current = int(os.environ["CURRENT_RUN_ID"])
+          except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+              deny("QUALIFICATION_HISTORY_UNAVAILABLE")
+          rows = history.get("workflow_runs") if isinstance(history, dict) else None
+          count = history.get("total_count") if isinstance(history, dict) else None
+          if (type(count) is not int or count < 1 or count > 100
+                  or not isinstance(rows, list)
+                  or not any(isinstance(row, dict) and row.get("id") == current
+                             for row in rows)):
+              deny("QUALIFICATION_HISTORY_UNVERIFIABLE")
+          for row in rows:
+              if not isinstance(row, dict):
+                  deny("QUALIFICATION_HISTORY_MALFORMED")
+              if (row.get("id") != current and
+                      row.get("event") in ("schedule", "workflow_dispatch")):
+                  deny("QUALIFICATION_ALREADY_ATTEMPTED")
+
+          # The pinned executor currently uses --force-with-lease, which is
+          # forbidden. Plain non-force push also has a TOCTOU fast-forward
+          # overwrite race. Require a separately reviewed atomic create-only
+          # implementation before a token can ever be issued.
+          try:
+              source = Path("reviewed-onecompany/scripts/sandbox_app_capabilities.py").read_text()
+              tree = ast.parse(source)
+          except (OSError, UnicodeError, SyntaxError):
+              deny("PINNED_EXECUTOR_UNVERIFIABLE")
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                  if node.value.startswith("--force") or "--force-with-lease=" in node.value:
+                      deny("PINNED_EXECUTOR_FORCE_PUSH_FORBIDDEN")
+              if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                      and node.func.id == "shell" and node.args
+                      and isinstance(node.args[0], (ast.List, ast.Tuple))):
+                  args = node.args[0].elts
+                  if (len(args) >= 2 and all(isinstance(x, ast.Constant)
+                                             for x in args[:2])
+                          and [args[0].value, args[1].value] == ["git", "push"]):
+                      deny("NONATOMIC_GIT_PUSH_UNQUALIFIED")
+          if not any(isinstance(node, ast.FunctionDef) and
+                     node.name == "create_probe_ref_atomic" for node in tree.body):
+              deny("ATOMIC_CREATE_ONLY_WRITE_UNPROVEN")
+          print("PASS: one-time run and candidate atomic-ref executor preflight")
+          PY
+
+      - name: Acquire sandbox-only App installation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.L5_SANDBOX_APP_ID }}
+          private-key: ${{ secrets.L5_SANDBOX_APP_PRIVATE_KEY }}
+          owner: NTinkicht
+          repositories: qualification-l5-sandbox
+          permission-contents: write
 
       - name: Qualify sandbox App git push ONLY (PR creation denied)
         env:
